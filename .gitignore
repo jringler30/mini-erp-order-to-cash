@@ -32,3 +32,6 @@ Thumbs.db
 
 # Streamlit cache
 .streamlit/
+
+# Local Claude memory — do not commit
+CLAUDE_MEMORY.md
