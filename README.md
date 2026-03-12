@@ -130,6 +130,25 @@ A 5-page Streamlit dashboard built on top of SQL views and analytics queries:
 
 ---
 
+## Dashboard Screenshots
+
+**Executive Overview**
+![Executive Overview](docs/dashboard_screenshots/01_dashboard.png)
+
+**Sales Analytics**
+![Sales Analytics](docs/dashboard_screenshots/03_dashboard.png)
+
+**Order Operations**
+![Order Operations](docs/dashboard_screenshots/05_dashboard.png)
+
+**Invoices & Payments**
+![Invoices & Payments](docs/dashboard_screenshots/06_dashboard.png)
+
+**Inventory Monitoring**
+![Inventory Monitoring](docs/dashboard_screenshots/07_dashboard.png)
+
+---
+
 ## How to Run Locally
 
 ```bash
