@@ -18,8 +18,60 @@ st.set_page_config(
     layout="wide"
 )
 
+import sys
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH  = os.path.join(BASE_DIR, "..", "data", "erp.db")
+
+# ─────────────────────────────────────────
+# AUTO-BUILD DATABASE ON FIRST LAUNCH
+# ─────────────────────────────────────────
+
+def build_database():
+    """Build and populate erp.db if it doesn't exist (needed for cloud deployment)."""
+    scripts_dir = os.path.join(BASE_DIR, "..", "scripts")
+    sql_dir     = os.path.join(BASE_DIR, "..", "sql")
+    db_path     = os.path.normpath(DB_PATH)
+
+    sys.path.insert(0, os.path.normpath(scripts_dir))
+    from generate_fake_data import generate_all
+
+    # Create tables from schema.sql
+    schema_path = os.path.join(sql_dir, "schema.sql")
+    with open(schema_path, "r") as f:
+        schema_sql = f.read()
+
+    conn   = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.executescript(schema_sql)
+    conn.commit()
+
+    # Generate and insert data
+    data = generate_all()
+
+    tables = [
+        ("customers",        [(d["customer_id"], d["customer_name"], d["customer_email"], d["region"], d["industry"], d["created_date"]) for d in data["customers"]],         6),
+        ("products",         [(d["product_id"], d["sku"], d["product_name"], d["category"], d["unit_cost"], d["unit_price"], d["active_flag"]) for d in data["products"]],    7),
+        ("warehouses",       [(d["warehouse_id"], d["warehouse_name"], d["city"], d["state"]) for d in data["warehouses"]],                                                   4),
+        ("inventory",        [(d["inventory_id"], d["warehouse_id"], d["product_id"], d["quantity_on_hand"], d["reorder_point"], d["last_updated"]) for d in data["inventory"]], 6),
+        ("sales_orders",     [(d["order_id"], d["customer_id"], d["order_date"], d["order_status"], d["requested_ship_date"], d["actual_ship_date"], d["total_amount"]) for d in data["orders"]], 7),
+        ("sales_order_items",[(d["order_item_id"], d["order_id"], d["product_id"], d["quantity"], d["unit_price"], d["line_total"]) for d in data["order_items"]],            6),
+        ("shipments",        [(d["shipment_id"], d["order_id"], d["warehouse_id"], d["shipment_date"], d["delivery_date"], d["shipment_status"]) for d in data["shipments"]], 6),
+        ("invoices",         [(d["invoice_id"], d["order_id"], d["invoice_date"], d["due_date"], d["invoice_amount"], d["invoice_status"]) for d in data["invoices"]],        6),
+        ("payments",         [(d["payment_id"], d["invoice_id"], d["payment_date"], d["payment_amount"], d["payment_method"]) for d in data["payments"]],                    5),
+    ]
+
+    for table_name, rows, ncols in tables:
+        placeholders = ",".join(["?"] * ncols)
+        cursor.executemany(f"INSERT INTO {table_name} VALUES ({placeholders})", rows)
+
+    conn.commit()
+    conn.close()
+
+if not os.path.exists(os.path.normpath(DB_PATH)):
+    os.makedirs(os.path.dirname(os.path.normpath(DB_PATH)), exist_ok=True)
+    with st.spinner("Setting up database for first launch..."):
+        build_database()
 
 # ─────────────────────────────────────────
 # CUSTOM CSS
@@ -130,13 +182,13 @@ with st.sidebar:
     st.markdown('<div class="sidebar-title">📦 Mini ERP</div>', unsafe_allow_html=True)
     st.markdown('<div class="sidebar-sub">Order-to-Cash Analytics</div>', unsafe_allow_html=True)
 
-    page = st.radio("", [
+    page = st.radio("Navigation", [
         "🏠  Executive Overview",
         "📈  Sales Analytics",
         "🚚  Order Operations",
         "🧾  Invoices & Payments",
         "🏭  Inventory Monitoring",
-    ])
+    ], label_visibility="collapsed")
 
     st.divider()
     st.caption("Mini ERP System · SQLite + Streamlit")
