@@ -1,0 +1,12 @@
+-- sql/analytics_queries.sql
+-- Business-facing analytics queries.
+
+-- TODO: implement queries for:
+--   Revenue by month
+--   Revenue by product
+--   Revenue by customer
+--   Open invoices
+--   Inventory at risk
+--   Avg days order to shipment
+--   Avg days invoice to payment
+--   Order status breakdown
