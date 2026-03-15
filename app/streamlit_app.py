@@ -28,15 +28,26 @@ DB_PATH  = os.path.join(BASE_DIR, "..", "data", "erp.db")
 # ─────────────────────────────────────────
 
 def build_database():
-    """Build and populate erp.db if it doesn't exist (needed for cloud deployment)."""
+    """Build and populate erp.db if it doesn't exist (needed for cloud deployment).
+
+    Runs the full pipeline in sequence:
+      1. Create OLTP tables from sql/schema.sql
+      2. Generate and insert synthetic ERP data
+      3. Build the star schema analytics tables
+      4. Load dimension tables
+      5. Load fact tables
+    """
     scripts_dir = os.path.join(BASE_DIR, "..", "scripts")
     sql_dir     = os.path.join(BASE_DIR, "..", "sql")
+    etl_dir     = os.path.join(BASE_DIR, "..", "etl")
     db_path     = os.path.normpath(DB_PATH)
 
     sys.path.insert(0, os.path.normpath(scripts_dir))
+    sys.path.insert(0, os.path.normpath(etl_dir))
+
     from generate_fake_data import generate_all
 
-    # Create tables from schema.sql
+    # ── Step 1: Create OLTP tables ────────────────────────────────────────────
     schema_path = os.path.join(sql_dir, "schema.sql")
     with open(schema_path, "r") as f:
         schema_sql = f.read()
@@ -46,27 +57,59 @@ def build_database():
     cursor.executescript(schema_sql)
     conn.commit()
 
-    # Generate and insert data
+    # ── Step 2: Generate and insert ERP data ──────────────────────────────────
     data = generate_all()
 
     tables = [
-        ("customers",        [(d["customer_id"], d["customer_name"], d["customer_email"], d["region"], d["industry"], d["created_date"]) for d in data["customers"]],         6),
-        ("products",         [(d["product_id"], d["sku"], d["product_name"], d["category"], d["unit_cost"], d["unit_price"], d["active_flag"]) for d in data["products"]],    7),
-        ("warehouses",       [(d["warehouse_id"], d["warehouse_name"], d["city"], d["state"]) for d in data["warehouses"]],                                                   4),
-        ("inventory",        [(d["inventory_id"], d["warehouse_id"], d["product_id"], d["quantity_on_hand"], d["reorder_point"], d["last_updated"]) for d in data["inventory"]], 6),
-        ("sales_orders",     [(d["order_id"], d["customer_id"], d["order_date"], d["order_status"], d["requested_ship_date"], d["actual_ship_date"], d["total_amount"]) for d in data["orders"]], 7),
-        ("sales_order_items",[(d["order_item_id"], d["order_id"], d["product_id"], d["quantity"], d["unit_price"], d["line_total"]) for d in data["order_items"]],            6),
-        ("shipments",        [(d["shipment_id"], d["order_id"], d["warehouse_id"], d["shipment_date"], d["delivery_date"], d["shipment_status"]) for d in data["shipments"]], 6),
-        ("invoices",         [(d["invoice_id"], d["order_id"], d["invoice_date"], d["due_date"], d["invoice_amount"], d["invoice_status"]) for d in data["invoices"]],        6),
-        ("payments",         [(d["payment_id"], d["invoice_id"], d["payment_date"], d["payment_amount"], d["payment_method"]) for d in data["payments"]],                    5),
+        ("customers",         "INSERT INTO customers VALUES (?,?,?,?,?,?)",
+         [(d["customer_id"], d["customer_name"], d["customer_email"],
+           d["region"], d["industry"], d["created_date"]) for d in data["customers"]]),
+        ("products",          "INSERT INTO products VALUES (?,?,?,?,?,?,?)",
+         [(d["product_id"], d["sku"], d["product_name"], d["category"],
+           d["unit_cost"], d["unit_price"], d["active_flag"]) for d in data["products"]]),
+        ("warehouses",        "INSERT INTO warehouses VALUES (?,?,?,?)",
+         [(d["warehouse_id"], d["warehouse_name"], d["city"], d["state"])
+          for d in data["warehouses"]]),
+        ("inventory",         "INSERT INTO inventory VALUES (?,?,?,?,?,?)",
+         [(d["inventory_id"], d["warehouse_id"], d["product_id"],
+           d["quantity_on_hand"], d["reorder_point"], d["last_updated"])
+          for d in data["inventory"]]),
+        ("sales_orders",      "INSERT INTO sales_orders VALUES (?,?,?,?,?,?,?)",
+         [(d["order_id"], d["customer_id"], d["order_date"], d["order_status"],
+           d["requested_ship_date"], d["actual_ship_date"], d["total_amount"])
+          for d in data["orders"]]),
+        ("sales_order_items", "INSERT INTO sales_order_items VALUES (?,?,?,?,?,?)",
+         [(d["order_item_id"], d["order_id"], d["product_id"],
+           d["quantity"], d["unit_price"], d["line_total"])
+          for d in data["order_items"]]),
+        ("shipments",         "INSERT INTO shipments VALUES (?,?,?,?,?,?)",
+         [(d["shipment_id"], d["order_id"], d["warehouse_id"],
+           d["shipment_date"], d["delivery_date"], d["shipment_status"])
+          for d in data["shipments"]]),
+        ("invoices",          "INSERT INTO invoices VALUES (?,?,?,?,?,?)",
+         [(d["invoice_id"], d["order_id"], d["invoice_date"],
+           d["due_date"], d["invoice_amount"], d["invoice_status"])
+          for d in data["invoices"]]),
+        ("payments",          "INSERT INTO payments VALUES (?,?,?,?,?)",
+         [(d["payment_id"], d["invoice_id"], d["payment_date"],
+           d["payment_amount"], d["payment_method"]) for d in data["payments"]]),
     ]
 
-    for table_name, rows, ncols in tables:
-        placeholders = ",".join(["?"] * ncols)
-        cursor.executemany(f"INSERT INTO {table_name} VALUES ({placeholders})", rows)
+    for table_name, sql, rows in tables:
+        cursor.executemany(sql, rows)
 
     conn.commit()
     conn.close()
+
+    # ── Steps 3–5: Build and populate the star schema ─────────────────────────
+    from build_star_schema import build_star_schema
+    from load_dimensions   import load_all_dimensions
+    from load_facts        import load_all_facts
+
+    build_star_schema()
+    load_all_dimensions()
+    load_all_facts()
+
 
 if not os.path.exists(os.path.normpath(DB_PATH)):
     os.makedirs(os.path.dirname(os.path.normpath(DB_PATH)), exist_ok=True)
@@ -164,11 +207,38 @@ def chart_layout(fig, height=380):
     return fig
 
 # ─────────────────────────────────────────
-# DATABASE HELPER
+# DATABASE HELPERS
 # ─────────────────────────────────────────
 
 @st.cache_data
 def query(sql):
+    """Query the database and return a DataFrame. Used for OLTP table queries."""
+    conn = sqlite3.connect(DB_PATH)
+    df   = pd.read_sql(sql, conn)
+    conn.close()
+    return df
+
+
+def _star_schema_exists() -> bool:
+    """Return True if the star schema analytics tables have been built."""
+    conn   = sqlite3.connect(DB_PATH)
+    cursor = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='fact_sales'"
+    )
+    exists = cursor.fetchone() is not None
+    conn.close()
+    return exists
+
+
+@st.cache_data
+def query_star(sql):
+    """Query the star schema analytics tables and return a DataFrame.
+
+    Falls back to returning an empty DataFrame if the star schema doesn't exist
+    yet, so the app stays functional while the ETL pipeline is first running.
+    """
+    if not _star_schema_exists():
+        return pd.DataFrame()
     conn = sqlite3.connect(DB_PATH)
     df   = pd.read_sql(sql, conn)
     conn.close()
@@ -221,12 +291,25 @@ if page == "🏠  Executive Overview":
 
     with col1:
         st.subheader("Monthly Revenue Trend")
-        df_rev = query("""
-            SELECT strftime('%Y-%m', order_date) AS month,
-                   ROUND(SUM(total_amount), 2)   AS revenue
-            FROM sales_orders WHERE order_status = 'Paid'
-            GROUP BY month ORDER BY month ASC
+        # Read from fact_sales + dim_date (star schema) for cleaner aggregation.
+        # Falls back to the OLTP query automatically if ETL hasn't run yet.
+        df_rev = query_star("""
+            SELECT
+                dd.year || '-' || printf('%02d', dd.month) AS month,
+                ROUND(SUM(fs.extended_amount), 2)          AS revenue
+            FROM fact_sales fs
+            JOIN dim_date dd ON fs.order_date_key = dd.date_key
+            WHERE fs.order_status = 'Paid'
+            GROUP BY dd.year, dd.month
+            ORDER BY dd.year, dd.month
         """)
+        if df_rev.empty:
+            df_rev = query("""
+                SELECT strftime('%Y-%m', order_date) AS month,
+                       ROUND(SUM(total_amount), 2)   AS revenue
+                FROM sales_orders WHERE order_status = 'Paid'
+                GROUP BY month ORDER BY month ASC
+            """)
         fig = px.area(df_rev, x="month", y="revenue",
                       labels={"month": "", "revenue": "Revenue ($)"},
                       color_discrete_sequence=[COLORS[0]])
@@ -258,14 +341,27 @@ elif page == "📈  Sales Analytics":
 
     with col1:
         st.subheader("Top 10 Products by Revenue")
-        df_prod = query("""
-            SELECT p.product_name, ROUND(SUM(oi.line_total), 2) AS revenue
-            FROM sales_order_items oi
-            JOIN products p     ON oi.product_id = p.product_id
-            JOIN sales_orders o ON oi.order_id   = o.order_id
-            WHERE o.order_status = 'Paid'
-            GROUP BY p.product_id ORDER BY revenue DESC LIMIT 10
+        # Star schema: fact_sales already has extended_amount pre-calculated,
+        # so no per-row multiplication is needed at query time.
+        df_prod = query_star("""
+            SELECT dp.product_name,
+                   ROUND(SUM(fs.extended_amount), 2) AS revenue
+            FROM fact_sales fs
+            JOIN dim_product dp ON fs.product_key = dp.product_key
+            WHERE fs.order_status = 'Paid'
+            GROUP BY dp.product_key
+            ORDER BY revenue DESC
+            LIMIT 10
         """)
+        if df_prod.empty:
+            df_prod = query("""
+                SELECT p.product_name, ROUND(SUM(oi.line_total), 2) AS revenue
+                FROM sales_order_items oi
+                JOIN products p     ON oi.product_id = p.product_id
+                JOIN sales_orders o ON oi.order_id   = o.order_id
+                WHERE o.order_status = 'Paid'
+                GROUP BY p.product_id ORDER BY revenue DESC LIMIT 10
+            """)
         fig = px.bar(df_prod, x="revenue", y="product_name", orientation="h",
                      labels={"revenue": "Revenue ($)", "product_name": ""},
                      color="revenue", color_continuous_scale=["#6366f1", "#22d3ee"])
@@ -274,13 +370,25 @@ elif page == "📈  Sales Analytics":
 
     with col2:
         st.subheader("Top 10 Customers by Revenue")
-        df_cust = query("""
-            SELECT c.customer_name, ROUND(SUM(o.total_amount), 2) AS revenue
-            FROM sales_orders o
-            JOIN customers c ON o.customer_id = c.customer_id
-            WHERE o.order_status = 'Paid'
-            GROUP BY c.customer_id ORDER BY revenue DESC LIMIT 10
+        # Star schema: one join to dim_customer instead of two OLTP joins.
+        df_cust = query_star("""
+            SELECT dc.customer_name,
+                   ROUND(SUM(fs.extended_amount), 2) AS revenue
+            FROM fact_sales fs
+            JOIN dim_customer dc ON fs.customer_key = dc.customer_key
+            WHERE fs.order_status = 'Paid'
+            GROUP BY dc.customer_key
+            ORDER BY revenue DESC
+            LIMIT 10
         """)
+        if df_cust.empty:
+            df_cust = query("""
+                SELECT c.customer_name, ROUND(SUM(o.total_amount), 2) AS revenue
+                FROM sales_orders o
+                JOIN customers c ON o.customer_id = c.customer_id
+                WHERE o.order_status = 'Paid'
+                GROUP BY c.customer_id ORDER BY revenue DESC LIMIT 10
+            """)
         fig2 = px.bar(df_cust, x="revenue", y="customer_name", orientation="h",
                       labels={"revenue": "Revenue ($)", "customer_name": ""},
                       color="revenue", color_continuous_scale=["#f59e0b", "#f43f5e"])
@@ -293,14 +401,25 @@ elif page == "📈  Sales Analytics":
 
     with col3:
         st.subheader("Revenue by Category")
-        df_cat = query("""
-            SELECT p.category, ROUND(SUM(oi.line_total), 2) AS revenue
-            FROM sales_order_items oi
-            JOIN products p     ON oi.product_id = p.product_id
-            JOIN sales_orders o ON oi.order_id   = o.order_id
-            WHERE o.order_status = 'Paid'
-            GROUP BY p.category ORDER BY revenue DESC
+        # Star schema: category is a dim_product attribute — one clean join.
+        df_cat = query_star("""
+            SELECT dp.category,
+                   ROUND(SUM(fs.extended_amount), 2) AS revenue
+            FROM fact_sales fs
+            JOIN dim_product dp ON fs.product_key = dp.product_key
+            WHERE fs.order_status = 'Paid'
+            GROUP BY dp.category
+            ORDER BY revenue DESC
         """)
+        if df_cat.empty:
+            df_cat = query("""
+                SELECT p.category, ROUND(SUM(oi.line_total), 2) AS revenue
+                FROM sales_order_items oi
+                JOIN products p     ON oi.product_id = p.product_id
+                JOIN sales_orders o ON oi.order_id   = o.order_id
+                WHERE o.order_status = 'Paid'
+                GROUP BY p.category ORDER BY revenue DESC
+            """)
         fig3 = px.pie(df_cat, names="category", values="revenue",
                       hole=0.45, color_discrete_sequence=COLORS)
         fig3.update_traces(textposition="outside", textfont=dict(color=FONT_COLOR))
