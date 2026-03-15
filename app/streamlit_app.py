@@ -245,6 +245,311 @@ def query_star(sql):
     return df
 
 # ─────────────────────────────────────────
+# ARCHITECTURE PAGE HELPERS
+# ─────────────────────────────────────────
+
+# Box geometry constants used by both diagram builders
+_BOX_W    = 2.8    # box width (all tables the same)
+_HEADER_H = 0.48   # height of the coloured title bar
+_ROW_H    = 0.30   # height per column row
+_PAD_B    = 0.18   # padding below the last column row
+
+def _box_h(n_cols: int) -> float:
+    """Total box height for a table with n_cols columns."""
+    return _HEADER_H + n_cols * _ROW_H + _PAD_B
+
+
+def _draw_table_box(fig, cx: float, cy: float, title: str,
+                    columns: list[str], accent: str) -> dict:
+    """Draw a labelled table box centred at (cx, cy).
+
+    Column strings that contain 'PK' are highlighted gold.
+    Column strings that contain 'FK' are highlighted cyan.
+    Everything else uses the default muted text colour.
+
+    Returns a dict of edge midpoints {'top', 'bottom', 'left', 'right'}
+    so callers can draw connector lines between boxes.
+    """
+    bh = _box_h(len(columns))
+    x0, x1 = cx - _BOX_W / 2, cx + _BOX_W / 2
+    y0, y1 = cy - bh / 2,     cy + bh / 2
+
+    # Body rectangle
+    fig.add_shape(type="rect", x0=x0, y0=y0, x1=x1, y1=y1,
+                  fillcolor="#1a1d27", line=dict(color=accent, width=2))
+    # Coloured header strip
+    fig.add_shape(type="rect", x0=x0, y0=y1 - _HEADER_H, x1=x1, y1=y1,
+                  fillcolor=accent, line=dict(color=accent, width=2))
+    # Table name
+    fig.add_annotation(x=cx, y=y1 - _HEADER_H / 2,
+                       text=f"<b>{title}</b>",
+                       showarrow=False,
+                       font=dict(color="white", size=11, family="monospace"),
+                       xanchor="center", yanchor="middle")
+    # Column rows
+    for i, col in enumerate(columns):
+        y_c = y1 - _HEADER_H - (i + 0.5) * _ROW_H
+        if   "PK" in col: col_color = "#f59e0b"   # gold   — primary keys
+        elif "FK" in col: col_color = "#22d3ee"   # cyan   — foreign keys
+        else:             col_color = "#c4c9d6"   # silver — regular columns
+        fig.add_annotation(x=x0 + 0.12, y=y_c, text=col,
+                           showarrow=False,
+                           font=dict(color=col_color, size=9.5, family="monospace"),
+                           xanchor="left", yanchor="middle")
+    return dict(top=(cx, y1), bottom=(cx, y0),
+                left=(x0, cy), right=(x1, cy))
+
+
+def _draw_conn(fig, p1: tuple, p2: tuple) -> None:
+    """Draw a dashed connector line between two edge points."""
+    fig.add_shape(type="line",
+                  x0=p1[0], y0=p1[1], x1=p2[0], y1=p2[1],
+                  line=dict(color="#4b5268", width=1.5, dash="dot"))
+
+
+def make_star_diagram():
+    """Build and return a Plotly Figure showing the star schema.
+
+    Layout:
+                     dim_date (top)
+                         |
+      dim_customer — fact_sales — dim_product
+                         |
+                   dim_warehouse (bottom)
+    """
+    FACT_C = "#6366f1"   # indigo  — fact tables
+    DIM_C  = "#1e40af"   # blue    — dimension tables
+
+    fig = go.Figure()
+    fig.update_layout(
+        height=700,
+        paper_bgcolor="#1a1d27",
+        plot_bgcolor="#0f1117",
+        margin=dict(l=10, r=10, t=10, b=10),
+        xaxis=dict(visible=False, range=[-0.4, 13.2]),
+        yaxis=dict(visible=False, range=[-0.4, 13.6]),
+    )
+
+    # ── fact_sales (centre) ────────────────────────────────────────────────────
+    fs = _draw_table_box(fig, 6, 6.0, "fact_sales", [
+        "fact_sales_id  PK",
+        "customer_key   FK",
+        "product_key    FK",
+        "warehouse_key  FK",
+        "order_date_key FK",
+        "ship_date_key  FK",
+        "quantity",
+        "unit_price",
+        "extended_amount",
+        "extended_cost",
+        "order_status",
+    ], FACT_C)
+
+    # ── dim_date (top) ─────────────────────────────────────────────────────────
+    dd = _draw_table_box(fig, 6, 11.0, "dim_date", [
+        "date_key    PK",
+        "full_date",
+        "year",
+        "quarter",
+        "month",
+        "month_name",
+        "day_name",
+        "week_of_year",
+    ], DIM_C)
+
+    # ── dim_customer (left) ────────────────────────────────────────────────────
+    dc = _draw_table_box(fig, 1.4, 6.0, "dim_customer", [
+        "customer_key  PK",
+        "customer_id",
+        "customer_name",
+        "region",
+        "industry",
+    ], DIM_C)
+
+    # ── dim_product (right) ────────────────────────────────────────────────────
+    dp = _draw_table_box(fig, 10.6, 6.0, "dim_product", [
+        "product_key  PK",
+        "product_id",
+        "product_name",
+        "category",
+        "unit_price",
+    ], DIM_C)
+
+    # ── dim_warehouse (bottom) ─────────────────────────────────────────────────
+    dw = _draw_table_box(fig, 6, 1.2, "dim_warehouse", [
+        "warehouse_key  PK",
+        "warehouse_id",
+        "warehouse_name",
+        "city",
+        "state",
+    ], DIM_C)
+
+    # ── FK connector lines ─────────────────────────────────────────────────────
+    _draw_conn(fig, fs["top"],    dd["bottom"])  # fact → dim_date
+    _draw_conn(fig, fs["left"],   dc["right"])   # fact → dim_customer
+    _draw_conn(fig, fs["right"],  dp["left"])    # fact → dim_product
+    _draw_conn(fig, fs["bottom"], dw["top"])     # fact → dim_warehouse
+
+    # ── Legend ─────────────────────────────────────────────────────────────────
+    fig.add_annotation(x=9.5, y=0.55, text="● PK = Primary key",
+                       showarrow=False,
+                       font=dict(color="#f59e0b", size=10, family="monospace"),
+                       xanchor="left")
+    fig.add_annotation(x=9.5, y=0.22, text="● FK = Foreign key",
+                       showarrow=False,
+                       font=dict(color="#22d3ee", size=10, family="monospace"),
+                       xanchor="left")
+
+    # ── Diagram title ──────────────────────────────────────────────────────────
+    fig.add_annotation(x=6, y=13.3,
+                       text="<b>Star Schema — fact_sales grain: one row per order line item</b>",
+                       showarrow=False,
+                       font=dict(color="#e0e4f0", size=13),
+                       xanchor="center")
+    return fig
+
+
+def make_oltp_diagram():
+    """Build and return a Plotly Figure showing the 9 OLTP tables as a node graph.
+
+    Tables are grouped into the 4 dependency layers they were designed in.
+    Edges show FK → PK relationships (child → parent).
+    """
+    LAYER_COLORS = {
+        1: "#10b981",   # green  — foundation (no FKs)
+        2: "#6366f1",   # indigo — depend on layer 1
+        3: "#f59e0b",   # amber  — depend on layer 2
+        4: "#f43f5e",   # rose   — depend on layer 3
+    }
+
+    node_layer = {
+        "customers": 1, "products": 1, "warehouses": 1,
+        "inventory": 2, "sales_orders": 2,
+        "sales_order_items": 3, "shipments": 3, "invoices": 3,
+        "payments": 4,
+    }
+
+    # (x, y) centres for each node
+    node_pos = {
+        "customers":         (2,    10.5),
+        "products":          (7,    10.5),
+        "warehouses":        (12,   10.5),
+        "inventory":         (2,    7),
+        "sales_orders":      (9.5,  7),
+        "sales_order_items": (2,    3.5),
+        "shipments":         (7,    3.5),
+        "invoices":          (12,   3.5),
+        "payments":          (7,    0.5),
+    }
+
+    # (child, parent) FK relationships
+    edges = [
+        ("inventory",         "warehouses"),
+        ("inventory",         "products"),
+        ("sales_orders",      "customers"),
+        ("sales_order_items", "sales_orders"),
+        ("sales_order_items", "products"),
+        ("shipments",         "sales_orders"),
+        ("shipments",         "warehouses"),
+        ("invoices",          "sales_orders"),
+        ("payments",          "invoices"),
+    ]
+
+    fig = go.Figure()
+    fig.update_layout(
+        height=600,
+        paper_bgcolor="#1a1d27",
+        plot_bgcolor="#0f1117",
+        margin=dict(l=120, r=20, t=30, b=20),
+        xaxis=dict(visible=False, range=[-1.5, 14.5]),
+        yaxis=dict(visible=False, range=[-1.2, 12.5]),
+    )
+
+    # ── Edges (draw first so they sit behind nodes) ────────────────────────────
+    for src, dst in edges:
+        x0, y0 = node_pos[src]
+        x1, y1 = node_pos[dst]
+        fig.add_trace(go.Scatter(
+            x=[x0, x1, None], y=[y0, y1, None],
+            mode="lines",
+            line=dict(color="#3a3f55", width=1.5),
+            showlegend=False, hoverinfo="none",
+        ))
+
+    # ── Nodes (annotation boxes — bgcolour gives the filled-box look) ──────────
+    for table, (x, y) in node_pos.items():
+        color = LAYER_COLORS[node_layer[table]]
+        fig.add_annotation(
+            x=x, y=y,
+            text=f"<b>{table}</b>",
+            showarrow=False,
+            font=dict(color="white", size=10, family="monospace"),
+            bgcolor=color,
+            bordercolor=color,
+            borderwidth=2,
+            borderpad=8,
+            xanchor="center",
+            yanchor="middle",
+        )
+
+    # ── Layer labels (left margin) ─────────────────────────────────────────────
+    layer_meta = {
+        1: (10.5, "Layer 1 · Foundation",    "No foreign keys"),
+        2: (7,    "Layer 2 · Transactions",  "Depend on Layer 1"),
+        3: (3.5,  "Layer 3 · Fulfillment",   "Depend on Layer 2"),
+        4: (0.5,  "Layer 4 · Collections",   "Depend on Layer 3"),
+    }
+    for layer, (y, label, sub) in layer_meta.items():
+        color = LAYER_COLORS[layer]
+        fig.add_annotation(x=-1.3, y=y + 0.3,
+                           text=f"<b>{label}</b>",
+                           showarrow=False,
+                           font=dict(color=color, size=9, family="monospace"),
+                           xanchor="left")
+        fig.add_annotation(x=-1.3, y=y - 0.3,
+                           text=sub,
+                           showarrow=False,
+                           font=dict(color="#8b92a5", size=8),
+                           xanchor="left")
+        # Dashed separator line between layers
+        if layer < 4:
+            sep_y = y - 1.75
+            fig.add_shape(type="line",
+                          x0=-1.5, y0=sep_y, x1=14.5, y1=sep_y,
+                          line=dict(color="#2e3248", width=1, dash="dash"))
+
+    fig.add_annotation(x=6.5, y=12.2,
+                       text="<b>OLTP Schema — 9 tables across 4 dependency layers</b>",
+                       showarrow=False,
+                       font=dict(color="#e0e4f0", size=13),
+                       xanchor="center")
+    return fig
+
+
+@st.cache_data
+def get_table_meta(table_name: str):
+    """Return (columns DataFrame, row_count) pulled live from erp.db.
+
+    Uses SQLite's PRAGMA table_info which returns column metadata without
+    scanning any rows — safe and fast even on large tables.
+    """
+    try:
+        conn  = sqlite3.connect(DB_PATH)
+        cols  = pd.read_sql(f"PRAGMA table_info({table_name})", conn)
+        count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+        conn.close()
+        cols = cols[["name", "type", "notnull", "pk"]].rename(columns={
+            "name": "Column", "type": "Type",
+            "notnull": "Not Null", "pk": "PK",
+        })
+        cols["Not Null"] = cols["Not Null"].map({1: "✓", 0: ""})
+        cols["PK"]       = cols["PK"].map({0: "", 1: "🔑"})
+        return cols, count
+    except Exception:
+        return pd.DataFrame(), 0
+
+
+# ─────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────
 
@@ -258,6 +563,7 @@ with st.sidebar:
         "🚚  Order Operations",
         "🧾  Invoices & Payments",
         "🏭  Inventory Monitoring",
+        "🗂️  Data Architecture",
     ], label_visibility="collapsed")
 
     st.divider()
@@ -668,3 +974,124 @@ elif page == "🏭  Inventory Monitoring":
         ORDER BY p.product_name
     """)
     st.dataframe(df_inv, use_container_width=True, hide_index=True)
+
+
+# ─────────────────────────────────────────
+# PAGE 6: DATA ARCHITECTURE
+# ─────────────────────────────────────────
+
+elif page == "🗂️  Data Architecture":
+    st.title("Data Architecture")
+    st.caption("Interactive reference for the OLTP transactional layer and the star schema analytics layer.")
+    st.divider()
+
+    tab_star, tab_oltp = st.tabs(["⭐  Star Schema (OLAP)", "🔗  OLTP Transactional Layer"])
+
+    # ── Tab 1: Star Schema ─────────────────────────────────────────────────────
+    with tab_star:
+        st.markdown(
+            "The ETL pipeline reads from the OLTP tables and writes into these seven tables. "
+            "Key dashboard charts query the fact and dimension tables directly."
+        )
+
+        st.plotly_chart(make_star_diagram(), use_container_width=True)
+
+        st.divider()
+        st.subheader("Row Counts")
+
+        star_tables = [
+            "fact_sales", "fact_shipments", "fact_payments",
+            "dim_customer", "dim_product", "dim_warehouse", "dim_date",
+        ]
+        metric_cols = st.columns(len(star_tables))
+        for col, tname in zip(metric_cols, star_tables):
+            _, count = get_table_meta(tname)
+            # Shorten label to fit the card width
+            short = tname.replace("fact_", "").replace("dim_", "")
+            col.metric(short, f"{count:,}")
+
+        st.divider()
+        st.subheader("Column Reference")
+        st.caption("Expand any table to see its full column list pulled live from the database.")
+
+        # Group facts and dims visually
+        fact_col, dim_col = st.columns(2)
+        with fact_col:
+            st.markdown("**Fact tables**")
+            for tname in ["fact_sales", "fact_shipments", "fact_payments"]:
+                schema_df, row_count = get_table_meta(tname)
+                with st.expander(f"📊 {tname}  ({row_count:,} rows)"):
+                    st.dataframe(schema_df, use_container_width=True, hide_index=True)
+
+        with dim_col:
+            st.markdown("**Dimension tables**")
+            for tname in ["dim_customer", "dim_product", "dim_warehouse", "dim_date"]:
+                schema_df, row_count = get_table_meta(tname)
+                with st.expander(f"📋 {tname}  ({row_count:,} rows)"):
+                    st.dataframe(schema_df, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.subheader("Design Notes")
+        st.markdown("""
+**Grain**
+| Table | One row per |
+|---|---|
+| `fact_sales` | Sales order line item |
+| `fact_shipments` | Shipment record |
+| `fact_payments` | Payment record |
+
+**Pre-calculated fields stored in the fact tables**
+- `extended_amount` = quantity × unit_price (revenue per line)
+- `extended_cost` = quantity × unit_cost (COGS per line)
+- `days_to_ship` = shipment_date − order_date
+- `days_to_deliver` = delivery_date − shipment_date
+- `days_to_pay` = payment_date − invoice_date
+
+**Surrogate key note**
+Dimension surrogate keys are currently aligned to the OLTP source IDs (e.g. `customer_key = customer_id`).
+This works because the source IDs are stable sequential integers with no reuse.
+In a production warehouse, dimension keys would be generated independently to support slowly changing dimensions (SCD) and source-system migrations.
+        """)
+
+    # ── Tab 2: OLTP Layer ──────────────────────────────────────────────────────
+    with tab_oltp:
+        st.markdown(
+            "Nine relational tables built across four dependency layers. "
+            "Each arrow in the diagram is a foreign key relationship (child → parent)."
+        )
+
+        st.plotly_chart(make_oltp_diagram(), use_container_width=True)
+
+        st.divider()
+        st.subheader("Row Counts")
+
+        oltp_tables = [
+            "customers", "products", "warehouses", "inventory",
+            "sales_orders", "sales_order_items", "shipments", "invoices", "payments",
+        ]
+        # Three columns of metrics (3 per row)
+        for row_start in range(0, len(oltp_tables), 3):
+            row_tables = oltp_tables[row_start:row_start + 3]
+            metric_cols = st.columns(3)
+            for col, tname in zip(metric_cols, row_tables):
+                _, count = get_table_meta(tname)
+                col.metric(tname.replace("_", " "), f"{count:,}")
+
+        st.divider()
+        st.subheader("Column Reference")
+        st.caption("Expand any table to see its full column list pulled live from the database.")
+
+        layer_groups = {
+            "Layer 1 · Foundation (no foreign keys)": ["customers", "products", "warehouses"],
+            "Layer 2 · Transactions": ["inventory", "sales_orders"],
+            "Layer 3 · Fulfillment":  ["sales_order_items", "shipments", "invoices"],
+            "Layer 4 · Collections":  ["payments"],
+        }
+        for layer_label, tables in layer_groups.items():
+            st.markdown(f"**{layer_label}**")
+            row_cols = st.columns(len(tables))
+            for col, tname in zip(row_cols, tables):
+                schema_df, row_count = get_table_meta(tname)
+                with col:
+                    with st.expander(f"📋 {tname}  ({row_count:,} rows)"):
+                        st.dataframe(schema_df, use_container_width=True, hide_index=True)
