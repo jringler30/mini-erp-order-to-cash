@@ -1,8 +1,8 @@
 # Mini ERP Order-to-Cash System
 
-I built this project to deepen my understanding of ERP systems ahead of starting a career in ERP consulting. Rather than just reading about how enterprise systems work, I wanted to actually build one, designing the database, modeling the business process, writing the analytics, and visualizing the data end to end.
+I built this project to deepen my understanding of ERP systems. Rather than just reading about how enterprise systems work, I wanted to actually build one, designing the database, modeling the business process, writing the analytics, and visualizing the data end to end.
 
-The order-to-cash process is one of the most fundamental workflows in any ERP system, and understanding how data flows through it, from a customer placing an order to a payment being collected, is something I'll be working with directly in my career. This project gave me hands-on experience with relational database design, SQL analytics, and the kind of business logic that sits behind platforms like SAP and Oracle.
+The order-to-cash process is one of the most fundamental workflows in any ERP system, and understanding how data flows through it, from a customer placing an order to a payment being collected, is something I find interesting. This project gave me hands-on experience with relational database design, SQL analytics, and the kind of business logic that sits behind platforms like SAP and Oracle.
 
 It's part portfolio project, part learning exercise, and part foundation for the work ahead.
 
